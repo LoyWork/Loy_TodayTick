@@ -16,7 +16,7 @@
 | | |
 |---|---|
 | 技术栈 | Tauri 2（Rust）+ 原生 WebView2 + 手写 HTML/CSS/JS |
-| 当前版本 | 2.1.0 |
+| 当前版本 | 2.1.1 |
 | 产物 | Windows x64 单文件 exe / 便携 ZIP，通过 GitHub Releases 分发 |
 | 依赖 | Windows 10/11 自带的 WebView2 运行时（Win11 已内置） |
 | 内存 | 常驻约 35–60 MB（WebView2 进程算在一起） |
@@ -94,15 +94,15 @@ cargo build --offline --release  # 发布版：src-tauri\target\release\todaytic
 
 提交本项目（包括 `.github/workflows/release.yml`、`src-tauri/Cargo.lock` 和 `src-tauri/vendor/`）到 GitHub 默认分支后：
 
-- 手动发布：进入 **Actions → Windows Release → Run workflow**，选择分支，填写版本标签（首次为 `v2.1.0`）。工作流会为所选提交创建标签和 Release。
-- 标签发布：推送 `v2.1.0` 这样的标签，会自动构建并发布该标签的提交。
+- 手动发布：进入 **Actions → Windows Release → Run workflow**，选择分支，填写版本标签（当前为 `v2.1.1`）。工作流会为所选提交创建标签和 Release。
+- 标签发布：推送 `v2.1.1` 这样的标签，会自动构建并发布该标签的提交。
 
 版本标签必须与 `src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 一致；后续发布前同步修改两个文件和 Cargo.lock。已有 Release 不会被覆盖，`-beta.1` 等标签会标记为预发布。
 
 发布前会执行前端语法检查、35 项时间解析断言和 Rust 原生自检，然后生成：
 
-- `TodayTick-v2.1.0-windows-x64.exe`
-- `TodayTick-v2.1.0-windows-x64.zip`（仅含 `TodayTick.exe`）
+- `TodayTick-v2.1.1-windows-x64.exe`
+- `TodayTick-v2.1.1-windows-x64.zip`（仅含 `TodayTick.exe`）
 - `SHA256SUMS.txt`
 
 只使用仓库自带的 `GITHUB_TOKEN`，工作流已声明发布所需的 `contents: write`；无需额外 PAT。不会打包提醒文件或 WebView2 用户数据。首次云端运行仍需在提交后确认。

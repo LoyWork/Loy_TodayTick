@@ -20,7 +20,8 @@ use tauri::{
     WebviewWindowBuilder,
 };
 
-const PORT: u16 = 48733;
+// Native debug-window checks must not replace the running release instance.
+const PORT: u16 = if cfg!(debug_assertions) { 48734 } else { 48733 };
 const WIN_W: f64 = 384.0;
 const POPUP_W: f64 = 320.0;
 const FMT: &str = "%Y-%m-%dT%H:%M";
@@ -30,9 +31,9 @@ const WIN_TITLE: &str = "TodayTick · 定时提醒";
 
 // ---------------------------------------------------------------- 窗口细修
 
-/// 直接对原生窗口下手：去掉标题栏 / 边框 / 系统菜单，强制成无边框弹层。
-/// tauri 的 `decorations(false)` 在某些组合（transparent + 亚克力）下不会落到
-/// Win32 样式上，这里补一刀，保证真的没有标题栏。
+/// Keep native non-client painting out of the transparent WebView surface.
+/// Tao may restore WS_CAPTION during a later show/focus/style update, so a
+/// one-off SetWindowLongPtr is insufficient. Both windows share this guard.
 #[cfg(windows)]
 mod winfix {
     use std::ffi::c_void;
@@ -41,6 +42,11 @@ mod winfix {
     extern "system" {
         fn GetWindowLongPtrW(hwnd: *mut c_void, index: i32) -> isize;
         fn SetWindowLongPtrW(hwnd: *mut c_void, index: i32, value: isize) -> isize;
+        fn CreateWindowExW(ex: u32, class: *const u16, title: *const u16, style: u32, x: i32, y: i32, w: i32, h: i32, parent: *mut c_void, menu: *mut c_void, instance: *mut c_void, param: *mut c_void) -> *mut c_void;
+        fn DestroyWindow(hwnd: *mut c_void) -> i32;
+        fn SendMessageW(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize;
+        fn GetClientRect(hwnd: *mut c_void, rect: *mut Rect) -> i32;
+        fn GetWindowRect(hwnd: *mut c_void, rect: *mut Rect) -> i32;
         fn SetWindowPos(
             hwnd: *mut c_void,
             after: *mut c_void,
@@ -52,6 +58,28 @@ mod winfix {
         ) -> i32;
     }
 
+    type SubclassProc = unsafe extern "system" fn(*mut c_void, u32, usize, isize, usize, usize) -> isize;
+
+    #[link(name = "comctl32")]
+    extern "system" {
+        fn SetWindowSubclass(hwnd: *mut c_void, proc: SubclassProc, id: usize, data: usize) -> i32;
+        fn RemoveWindowSubclass(hwnd: *mut c_void, proc: SubclassProc, id: usize) -> i32;
+        fn DefSubclassProc(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize;
+    }
+
+    #[repr(C)]
+    struct StyleStruct { old: u32, new: u32 }
+    #[repr(C)]
+    #[derive(Default)]
+    struct Rect { left: i32, top: i32, right: i32, bottom: i32 }
+
+    const SUBCLASS_ID: usize = 0x5454_4652;
+    const WM_STYLECHANGING: u32 = 0x007C;
+    const WM_NCCALCSIZE: u32 = 0x0083;
+    const WM_NCPAINT: u32 = 0x0085;
+    const WM_NCACTIVATE: u32 = 0x0086;
+    const WM_NCDESTROY: u32 = 0x0082;
+
     const GWL_STYLE: i32 = -16;
     const GWL_EXSTYLE: i32 = -20;
     const WS_CAPTION: isize = 0x00C0_0000;
@@ -62,22 +90,63 @@ mod winfix {
     const WS_POPUP: isize = 0x8000_0000u32 as isize;
     const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
     const WS_EX_APPWINDOW: isize = 0x0004_0000;
+    const WS_EX_WINDOWEDGE: isize = 0x0000_0100;
+    const WS_EX_CLIENTEDGE: isize = 0x0000_0200;
     const SWP_NOSIZE: u32 = 0x0001;
     const SWP_NOMOVE: u32 = 0x0002;
     const SWP_NOZORDER: u32 = 0x0004;
     const SWP_NOACTIVATE: u32 = 0x0010;
     const SWP_FRAMECHANGED: u32 = 0x0020;
 
-    pub fn strip_decorations(hwnd: *mut c_void) -> isize {
+    fn clean_style(style: isize) -> isize {
+        (style & !(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) | WS_POPUP
+    }
+
+    fn clean_ex_style(style: isize, main: bool) -> isize {
+        let style = style & !(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE);
+        if main { (style & !WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW }
+        else { (style & !WS_EX_APPWINDOW) | WS_EX_TOOLWINDOW }
+    }
+
+    unsafe extern "system" fn frameless_proc(
+        hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize, id: usize, main: usize,
+    ) -> isize {
+        match msg {
+            WM_STYLECHANGING if lparam != 0 => {
+                // Let the runtime update its state before enforcing our frame policy.
+                let result = DefSubclassProc(hwnd, msg, wparam, lparam);
+                let styles = &mut *(lparam as *mut StyleStruct);
+                if wparam as i32 == GWL_STYLE {
+                    styles.new = clean_style(styles.new as isize) as u32;
+                } else if wparam as i32 == GWL_EXSTYLE {
+                    styles.new = clean_ex_style(styles.new as isize, main != 0) as u32;
+                }
+                result
+            }
+            WM_NCCALCSIZE if wparam != 0 => 0,
+            WM_NCPAINT => 0,
+            // Preserve Tao's focus events; -1 tells DefWindowProc not to paint a caption.
+            WM_NCACTIVATE => DefSubclassProc(hwnd, msg, wparam, -1),
+            WM_NCDESTROY => {
+                RemoveWindowSubclass(hwnd, frameless_proc, id);
+                DefSubclassProc(hwnd, msg, wparam, lparam)
+            }
+            _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+        }
+    }
+
+    pub fn strip_decorations(hwnd: *mut c_void, main: bool) {
         unsafe {
+            if SetWindowSubclass(hwnd, frameless_proc, SUBCLASS_ID, main as usize) == 0 {
+                eprintln!("[win] 安装无边框保护失败: {}", std::io::Error::last_os_error());
+                return;
+            }
             let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-            let cleaned = (style
-                & !(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX))
-                | WS_POPUP;
-            SetWindowLongPtrW(hwnd, GWL_STYLE, cleaned);
-            // WS_POPUP 会让窗口从任务栏消失，补上 APPWINDOW 才能从任务栏叫回来。
+            let cleaned = clean_style(style);
+            if style != cleaned { SetWindowLongPtrW(hwnd, GWL_STYLE, cleaned); }
             let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW);
+            let cleaned_ex = clean_ex_style(ex, main);
+            if ex != cleaned_ex { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, cleaned_ex); }
             SetWindowPos(
                 hwnd,
                 std::ptr::null_mut(),
@@ -87,24 +156,69 @@ mod winfix {
                 0,
                 SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
             );
-            cleaned
         }
+    }
+
+    /// Real Win32 regression: emulate the runtime restoring caption styles,
+    /// including activation and a non-client recalculation, for both window roles.
+    pub fn selftest() -> Result<(), String> {
+        let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+        for main in [true, false] {
+            unsafe {
+                let hwnd = CreateWindowExW(0, class.as_ptr(), class.as_ptr(),
+                    (WS_POPUP | WS_CAPTION | WS_SYSMENU) as u32, 0, 0, 320, 200,
+                    std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+                if hwnd.is_null() { return Err(std::io::Error::last_os_error().to_string()); }
+                strip_decorations(hwnd, main);
+                for _ in 0..3 {
+                    let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+                    SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_CAPTION | WS_THICKFRAME);
+                    SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0,
+                        SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+                    SendMessageW(hwnd, WM_NCACTIVATE, 1, 0);
+                    SendMessageW(hwnd, WM_NCACTIVATE, 0, 0);
+                }
+                let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+                let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                let mut client = Rect::default();
+                let mut outer = Rect::default();
+                let rect_ok = GetClientRect(hwnd, &mut client) != 0 && GetWindowRect(hwnd, &mut outer) != 0;
+                let passed = style & (WS_CAPTION | WS_THICKFRAME) == 0
+                    && (ex & WS_EX_APPWINDOW != 0) == main
+                    && (ex & WS_EX_TOOLWINDOW != 0) != main
+                    && rect_ok && client.right - client.left == outer.right - outer.left
+                    && client.bottom - client.top == outer.bottom - outer.top;
+                DestroyWindow(hwnd);
+                if !passed { return Err(format!("main={main}, style={style:#x}, ex={ex:#x}")); }
+            }
+        }
+        Ok(())
     }
 }
 
 fn force_frameless(win: &WebviewWindow) {
     #[cfg(windows)]
     {
-        match win.hwnd() {
-            Ok(h) => {
-                let raw = h.0 as *mut std::ffi::c_void;
-                winfix::strip_decorations(raw);
-            }
+        let target = win.clone();
+        // Resolve the handle on the owner thread too: a just-created window may
+        // not yet expose it to the caller until queued creation messages finish.
+        let _ = win.run_on_main_thread(move || match target.hwnd() {
+            Ok(h) => winfix::strip_decorations(h.0 as *mut std::ffi::c_void, target.label() == "main"),
             Err(err) => eprintln!("[win] 取 hwnd 失败: {err}"),
-        }
+        });
     }
     #[cfg(not(windows))]
     let _ = win;
+}
+
+fn apply_glass(win: &WebviewWindow) {
+    let target = win.clone();
+    let _ = win.run_on_main_thread(move || {
+        if let Err(err) = window_vibrancy::apply_acrylic(&target, Some((24, 27, 34, 105))) {
+            eprintln!("[win] 亚克力效果未启用: {err}");
+        }
+        force_frameless(&target);
+    });
 }
 
 // ---------------------------------------------------------------- 数据模型
@@ -507,8 +621,7 @@ fn ensure_popup(app: &AppHandle) -> Option<WebviewWindow> {
     match built {
         Ok(win) => {
             force_frameless(&win);
-            let _ = window_vibrancy::apply_acrylic(&win, Some((24, 27, 34, 105)));
-            force_frameless(&win);
+            apply_glass(&win);
             Some(win)
         }
         Err(err) => {
@@ -798,6 +911,12 @@ fn selftest() -> i32 {
         }
     };
 
+    #[cfg(windows)]
+    {
+        let frame = winfix::selftest();
+        check("无边框样式重写与焦点切换（主窗/弹窗）", frame.is_ok(), format!("{:?}", frame.err()));
+    }
+
     check(
         "解析 ISO",
         parse_when("2026-11-05T14:35").is_some(),
@@ -953,8 +1072,7 @@ fn main() {
                     let _ = win.show();
                     // show() 之后 tauri 会把窗口样式还原成带标题栏的版本，这里再削一次。
                     force_frameless(&win);
-                    let _ = window_vibrancy::apply_acrylic(&win, Some((24, 27, 34, 105)));
-                    force_frameless(&win);
+                    apply_glass(&win);
                     let _ = win.set_position(LogicalPosition::new(x, bottom - 360.0));
                 }
                 Err(err) => {

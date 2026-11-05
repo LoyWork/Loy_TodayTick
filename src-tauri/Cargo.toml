@@ -1,6 +1,6 @@
 [package]
 name = "todaytick"
-version = "2.1.0"
+version = "2.1.1"
 description = "TodayTick · 轻量定时提醒"
 edition = "2021"
 rust-version = "1.77"

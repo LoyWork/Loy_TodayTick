@@ -51,3 +51,13 @@ Final native review caught a system caption reappearing after window initializat
 - User requested reminder cards at the bottom right. Replaced centered placement with the main window monitor's actual work area, keeping a 16 logical-pixel inset above/right of the taskbar and accounting for monitor origin and scaling.
 - Existing popup resize/queue refresh paths reapply this position, so taller reminders remain anchored at the bottom.
 - Updated native smoke expectation from center/top to the work-area bottom/right. OS-level multi-monitor/scale acceptance remains for the next release; source compilation is checked locally.
+
+## 2.1.1 — persistent native frame guard
+
+- User reported that the native caption still reappeared on both windows in the downloaded 2.1.0 release. A one-off style edit was insufficient when the runtime rewrote styles or Windows repainted the non-client area.
+- Added an owner-thread common-controls subclass shared by the main/reminder windows. It filters incoming caption/frame styles, keeps client area frame-free, and forwards activation state while suppressing default caption painting. The subclass is removed on WM_NCDESTROY.
+- Corrected the native handle timing: resolve HWND inside the owner-thread dispatch, after queued window creation; acrylic is applied on that thread too. Previous early calls could report an unavailable handle.
+- Preserved main taskbar access and kept reminder popups excluded from the taskbar. Debug single-instance port is separate from release, allowing isolated testing alongside the user's downloaded build.
+- Actual main-window screenshots after focus, drag, hide and restore showed no native caption. Formal release/reminder data were not replaced.
+- Added a real Win32 --selftest regression for both roles: create hidden native windows, repeatedly restore caption/thick-frame bits, activate/deactivate, then verify styles, client/outer sizes and taskbar flags. Both roles passed, alongside all existing native self-tests. Popup-specific full visual capture remains for release acceptance; the shared native guard is tested for both roles.
+- Patch version advanced to 2.1.1; 2.1.0 remains unchanged.
