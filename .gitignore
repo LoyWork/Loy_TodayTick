@@ -1,0 +1,25 @@
+# 运行数据（含个人提醒内容，不纳入版本管理）
+reminders.json
+reminders.json.tmp
+*.selftest/
+
+# Rust / Tauri 构建产物
+src-tauri/target/
+src-tauri/gen/schemas/
+dist/
+
+# WebView2 数据目录 / 调试残留
+EBWebView/
+.probe-wv2/
+.wv2data/
+.testenv/
+
+# Python（旧的 tkinter 版本遗留）
+__pycache__/
+*.pyc
+
+# 系统 / 编辑器
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

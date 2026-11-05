@@ -1,0 +1,97 @@
+name: Windows Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布版本（须与 Cargo.toml、tauri.conf.json 一致）'
+        required: true
+        default: v2.1.0
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release version and commit
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            throw '版本标签应为 v2.1.0 或 v2.1.0-beta.1'
+          }
+          $version = $env:RELEASE_TAG.Substring(1)
+          $cargo = [regex]::Match((Get-Content src-tauri/Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+          $tauri = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($cargo -ne $version -or $tauri -ne $version) {
+            throw "标签 $version 与项目版本不一致：Cargo=$cargo, Tauri=$tauri"
+          }
+          $existing = git rev-parse --verify --quiet "refs/tags/$env:RELEASE_TAG^{commit}"
+          if ($LASTEXITCODE -eq 0) {
+            $head = git rev-parse HEAD
+            if ($existing -ne $head) { throw '已有标签指向其他提交，请选择正确提交或新版本号' }
+          }
+          # A missing tag is expected on the manual first-release path.
+          $global:LASTEXITCODE = 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Check frontend
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          node --check ui/app.js
+          node --check ui/popup.js
+          node tools/test_parse.mjs
+
+      - name: Build Windows x64 executable
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          rustup toolchain install stable --profile minimal
+          rustup target add x86_64-pc-windows-msvc --toolchain stable
+          cargo +stable build --release --locked --target x86_64-pc-windows-msvc --manifest-path src-tauri/Cargo.toml
+
+      - name: Run native self-test
+        run: |
+          $exe = (Resolve-Path src-tauri/target/x86_64-pc-windows-msvc/release/todaytick.exe).Path
+          $process = Start-Process -FilePath $exe -ArgumentList '--selftest' -Wait -PassThru -WindowStyle Hidden
+          Get-Content (Join-Path (Split-Path $exe) '.selftest/todaytick_selftest.log') -ErrorAction SilentlyContinue
+          if ($process.ExitCode -ne 0) { throw "Native self-test failed: $($process.ExitCode)" }
+
+      - name: Package executable and portable ZIP
+        run: |
+          ./tools/package-release.ps1 -Executable src-tauri/target/x86_64-pc-windows-msvc/release/todaytick.exe -Version $env:RELEASE_TAG.Substring(1) -OutputDirectory dist/release
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $assets = @(Get-ChildItem dist/release -File | ForEach-Object FullName)
+          $options = @('--target', $env:GITHUB_SHA, '--title', "TodayTick $env:RELEASE_TAG", '--generate-notes')
+          if ($env:RELEASE_TAG.Contains('-')) { $options += '--prerelease' }
+          gh release create $env:RELEASE_TAG @assets @options
+          if ($LASTEXITCODE -ne 0) { throw 'Release 发布失败；已有 Release 不会被覆盖' }

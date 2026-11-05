@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>提醒</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="pcard" id="pcard">
+    <div class="popup-label" data-tauri-drag-region><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9M10 21h4"/></svg>到时间了<span>TodayTick</span></div>
+    <div class="phead">
+      <span class="ptime mono" id="ptime" data-tauri-drag-region>--:--</span>
+      <span class="pflag" id="pflag" hidden>已过期</span>
+    </div>
+    <p class="ptext" id="ptext" data-tauri-drag-region></p>
+    <div class="pactions">
+      <button class="ghost" id="snooze">稍后 5 分钟</button>
+      <button class="primary" id="ack">知道了</button>
+    </div>
+  </div>
+  <script src="parse.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>TodayTick</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell" id="shell">
+    <header class="bar" data-tauri-drag-region>
+      <span class="brand" data-tauri-drag-region>TodayTick</span>
+      <span class="clock mono" id="clock" data-tauri-drag-region>--:--</span>
+      <button class="close" id="btn-close" title="收起到托盘" aria-label="收起到托盘"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg></button>
+    </header>
+
+    <section class="composer">
+      <input id="desc" class="field" type="text" placeholder="提醒我什么…" aria-label="提醒内容" autocomplete="off" spellcheck="false" />
+      <div class="hair"></div>
+      <div class="line">
+        <svg class="time-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>
+        <input id="when" class="field time" type="text" placeholder="什么时候？如 15:30 或 +30分" aria-label="提醒时间" aria-describedby="hint" autocomplete="off" spellcheck="false" />
+        <button class="primary" id="btn-add"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>添加</button>
+      </div>
+      <span class="hint" id="hint" role="status" aria-live="polite"></span>
+    </section>
+
+    <div class="section" id="section" role="status" aria-live="polite"></div>
+
+    <div class="listwrap">
+      <div class="list" id="list"></div>
+    </div>
+
+    <footer class="foot">
+      <button class="tgl" id="tgl-start" role="switch" aria-checked="false"><i></i><span>开机自启</span></button>
+      <span class="keyhint">回车添加 <kbd>↵</kbd></span>
+    </footer>
+
+  </div>
+
+  <script src="parse.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
